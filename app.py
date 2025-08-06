@@ -1,6 +1,7 @@
 import os
 import base64
 import requests
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -63,7 +64,6 @@ def analyze_content():
     input_type = request.form.get("input_type")
     input_content = request.form.get("input_content")
 
-    # Image upload handling
     if "image" in request.files:
         input_type = "image"
         image_file = request.files["image"]
@@ -75,57 +75,55 @@ def analyze_content():
         return jsonify({"error": "Missing 'input_type' or 'input_content'"}), 400
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}" if OPENROUTER_API_KEY else "",
-        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": "https://verisightai.vercel.app",
+        "X-Title": "VeriSight AI Verification",
+        "Content-Type": "application/json"
     }
 
     openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
 
+    messages = [{"role": "system", "content": PROMPT}]
+    
     if input_type == "image":
-        payload = {
-            "model": "qwen/qwen2.5-vl-32b-instruct:free",
-            "messages": [
-                {"role": "system", "content": PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": input_content
-                        }
-                    ]
-                }
-            ],
-            "temperature": 0,
-            "max_tokens": 1500,
-        }
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": PROMPT.format(input_type="image", input_content="Image provided below.")},
+                {"type": "image_url", "image_url": input_content}
+            ]
+        })
+        model_name = "qwen/qwen2.5-vl-32b-instruct:free"
     else:
-        # For text or video input, format prompt normally
         safe_content = input_content.replace('"', '\\"').replace("\n", " ")
         prompt = PROMPT.format(input_type=input_type, input_content=safe_content)
-        payload = {
-            "model": "mistralai/mistral-small-3.2-24b-instruct:free",
-            "messages": [
-                {"role": "system", "content": PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0,
-            "max_tokens": 1500,
-        }
+        messages.append({"role": "user", "content": prompt})
+        model_name = "mistralai/mistral-small-3.2-24b-instruct:free"
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 2000,
+        "web_search": True  # ✅ Enables web search mode
+    }
 
     try:
         response = requests.post(openrouter_url, headers=headers, json=payload)
         response.raise_for_status()
 
         data = response.json()
-        content = data["choices"][0]["message"]["content"]
+        raw_content = data["choices"][0]["message"]["content"]
 
-        import json
         try:
-            content_json = json.loads(content)
-            return jsonify(content_json)
-        except json.JSONDecodeError:
-            return jsonify({"raw_response": content})
+            # Attempt to clean and parse JSON from raw text
+            json_start = raw_content.find('{')
+            json_end = raw_content.rfind('}') + 1
+            json_str = raw_content[json_start:json_end]
+            parsed_json = json.loads(json_str)
+            return jsonify(parsed_json)
+        except Exception:
+            return jsonify({"raw_response": raw_content})
 
     except requests.exceptions.RequestException as e:
         return jsonify({"error": "OpenRouter API request failed", "details": str(e)}), 500
@@ -134,4 +132,3 @@ def analyze_content():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-
