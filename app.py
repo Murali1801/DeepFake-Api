@@ -60,11 +60,10 @@ Do not include anything outside this JSON.
 
 @app.route("/analyze-content", methods=["POST"])
 def analyze_content():
-    # Extract form fields
     input_type = request.form.get("input_type")
     input_content = request.form.get("input_content")
 
-    # If image file uploaded, override input_type and encode image
+    # Image upload handling
     if "image" in request.files:
         input_type = "image"
         image_file = request.files["image"]
@@ -75,26 +74,44 @@ def analyze_content():
     if not input_type or not input_content:
         return jsonify({"error": "Missing 'input_type' or 'input_content'"}), 400
 
-    # Escape quotes/newlines for safe prompt insertion
-    safe_content = input_content.replace('"', '\\"').replace("\n", " ")
-    prompt = PROMPT.format(input_type=input_type, input_content=safe_content)
-
-    payload = {
-        "model": "qwen/qwen2.5-vl-32b-instruct:free",
-        "messages": [
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0,
-        "max_tokens": 1500,
-    }
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}" if OPENROUTER_API_KEY else "",
         "Content-Type": "application/json",
     }
 
     openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
+
+    if input_type == "image":
+        payload = {
+            "model": "qwen/qwen2.5-vl-32b-instruct:free",
+            "messages": [
+                {"role": "system", "content": PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": input_content
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 1500,
+        }
+    else:
+        # For text or video input, format prompt normally
+        safe_content = input_content.replace('"', '\\"').replace("\n", " ")
+        prompt = PROMPT.format(input_type=input_type, input_content=safe_content)
+        payload = {
+            "model": "qwen/qwen2.5-vl-32b-instruct:free",
+            "messages": [
+                {"role": "system", "content": PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0,
+            "max_tokens": 1500,
+        }
 
     try:
         response = requests.post(openrouter_url, headers=headers, json=payload)
