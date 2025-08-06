@@ -54,7 +54,6 @@ Output ONLY the following JSON format:
     }}
   ]
 }}
-
 Do not include anything outside this JSON.
 """
 
@@ -63,16 +62,26 @@ def analyze_content():
     input_type = request.form.get("input_type")
     input_content = request.form.get("input_content")
 
-    # Image upload handling
+    image_b64 = None
+
+    # Handle image
     if "image" in request.files:
-        input_type = "image"
         image_file = request.files["image"]
+        input_type = "image"
         image_bytes = image_file.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         input_content = f"data:{image_file.mimetype};base64,{image_b64}"
 
-    if not input_type or not input_content:
-        return jsonify({"error": "Missing 'input_type' or 'input_content'"}), 400
+    # Handle video (as URL or description)
+    elif input_type == "video" and input_content:
+        pass  # Already captured
+
+    # Handle text
+    elif input_type == "text" and input_content:
+        pass  # Already captured
+
+    else:
+        return jsonify({"error": "Missing or unsupported input_type or input_content"}), 400
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}" if OPENROUTER_API_KEY else "",
@@ -85,53 +94,44 @@ def analyze_content():
         payload = {
             "model": "qwen/qwen2.5-vl-32b-instruct:free",
             "messages": [
-                {"role": "system", "content": PROMPT},
+                {"role": "system", "content": PROMPT.format(input_type=input_type, input_content="Image uploaded")},
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": input_content
-                        }
+                        {"type": "image_url", "image_url": input_content}
                     ]
                 }
             ],
-            "temperature": 0,
+            "temperature": 0.1,
             "max_tokens": 1500,
         }
     else:
-        # For text or video input, format prompt normally
-        safe_content = input_content.replace('"', '\\"').replace("\n", " ")
-        prompt = PROMPT.format(input_type=input_type, input_content=safe_content)
+        prompt = PROMPT.format(input_type=input_type, input_content=input_content.replace('"', '\\"'))
         payload = {
-            "model": "qwen/qwen2.5-vl-32b-instruct:free",
+            "model": "mistralai/mistral-small-3.2-24b-instruct:free",
             "messages": [
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0,
+            "temperature": 0.1,
             "max_tokens": 1500,
         }
 
     try:
         response = requests.post(openrouter_url, headers=headers, json=payload)
         response.raise_for_status()
-
         data = response.json()
+
         content = data["choices"][0]["message"]["content"]
 
         import json
         try:
-            content_json = json.loads(content)
-            return jsonify(content_json)
+            return jsonify(json.loads(content))
         except json.JSONDecodeError:
             return jsonify({"raw_response": content})
 
     except requests.exceptions.RequestException as e:
         return jsonify({"error": "OpenRouter API request failed", "details": str(e)}), 500
-    except Exception as e:
-        return jsonify({"error": "Unexpected error", "details": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
+    app.run(debug=True)
